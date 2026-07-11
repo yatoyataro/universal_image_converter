@@ -13,7 +13,7 @@ class ImageConverterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("Universal Image Converter 2.0")
+        self.title("Universal Image Converter")
         self.geometry("1100x700")
         self.minsize(980, 640)
         self.resizable(True, True)
@@ -45,7 +45,7 @@ class ImageConverterApp(ctk.CTk):
         self.left_content.grid(row=0, column=0, sticky="nsew", padx=22, pady=22)
         self.left_content.grid_columnconfigure(0, weight=1)
 
-        self.title_label = ctk.CTkLabel(self.left_content, text="Converter 2.0", font=ctk.CTkFont(size=25, weight="bold"))
+        self.title_label = ctk.CTkLabel(self.left_content, text="Converter", font=ctk.CTkFont(size=25, weight="bold"))
         self.title_label.grid(row=0, column=0, sticky="w", pady=(2, 8))
         self.subtitle_label = ctk.CTkLabel(
             self.left_content,
