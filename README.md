@@ -78,7 +78,7 @@ The application requires an output folder to be selected before **Start Conversi
 4. Select WebP, PNG, or JPG.
 5. Click **Start Conversion**.
 
-Output files keep the original base name and receive the selected target extension. Existing files with the same output name may be overwritten by Pillow or `shutil.copy2`.
+Output files keep the original base name and receive the selected target extension. If an output file with the same name already exists, the new file is saved as `name-1.ext`, `name-2.ext`, and so on — existing files are never overwritten.
 
 ## Build a Windows Executable
 
@@ -105,11 +105,22 @@ The spec file bundles CustomTkinter resources and uses `logo.ico` as the applica
 ## Project Structure
 
 ```text
-app_v2.py       Application UI and conversion logic
-app_v2.spec     PyInstaller build configuration
-logo.ico        Windows executable icon
-build/          PyInstaller intermediate files
-dist/           Packaged executable output
+app_v2.py             Application UI
+converter_core.py     Pure conversion logic (headlessly testable)
+tests/                pytest suite for converter_core
+app_v2.spec           PyInstaller build configuration
+requirements.txt      Runtime dependencies
+requirements-dev.txt  Development dependencies (pytest)
+logo.ico              Windows executable icon
+build/                PyInstaller intermediate files (not tracked)
+dist/                 Packaged executable output (not tracked)
+```
+
+## Run the Tests
+
+```powershell
+venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+venv\Scripts\python.exe -m pytest
 ```
 
 ## How It Works
