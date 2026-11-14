@@ -4,6 +4,7 @@ import queue
 import tempfile
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -20,6 +21,7 @@ except ImportError:  # drag-and-drop stays optional
 
 SUPPORTED_INPUT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 APP_VERSION = "1.1.0"
+APP_AUTHOR = "yatoyataro"
 ERROR_REPORT_PATH = os.path.join(tempfile.gettempdir(), "universal_image_converter_errors.txt")
 
 # Default appearance; _load_settings() overrides this from the saved
@@ -418,9 +420,13 @@ class ImageConverterApp(
             text="Batch-convert images between PNG, JPG, WebP and BMP.\n"
                  "Built with Python, CustomTkinter and Pillow.",
             justify="center", text_color=ui_palette.TEXT_MUTED, font=ctk.CTkFont(size=12),
-        ).grid(row=2, column=0, pady=(0, 20), padx=24)
+        ).grid(row=2, column=0, pady=(0, 14), padx=24)
+        ctk.CTkLabel(
+            dlg, text=f"© {datetime.now().year} {APP_AUTHOR}. All rights reserved.",
+            text_color=ui_palette.TEXT_FAINT, font=ctk.CTkFont(size=11),
+        ).grid(row=3, column=0, pady=(0, 18))
         ctk.CTkButton(dlg, text="Close", width=90, command=dlg.destroy).grid(
-            row=3, column=0, pady=(0, 24))
+            row=4, column=0, pady=(0, 24))
 
     def select_files(self):
         filetypes = (
