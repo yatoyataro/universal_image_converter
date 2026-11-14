@@ -106,7 +106,7 @@ venv\Scripts\python.exe -m pip install pyinstaller
 Build using the included specification file:
 
 ```powershell
-venv\Scripts\pyinstaller.exe app_v2.spec
+venv\Scripts\python.exe -m PyInstaller app_v2.spec --noconfirm
 ```
 
 The executable is generated at:
@@ -129,7 +129,7 @@ requirements.txt      Runtime dependencies
 requirements-dev.txt  Development dependencies (pytest)
 logo.ico              Windows executable icon
 build/                PyInstaller intermediate files (not tracked)
-dist/                 Packaged executable output (not tracked)
+dist/                 Packaged executable, tracked so the exe ships with the repo
 ```
 
 ## Run the Tests

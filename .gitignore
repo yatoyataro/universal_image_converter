@@ -10,9 +10,8 @@ venv/
 .claude/
 env/
 
-# Build and distribution
+# Build intermediates only; dist/ is tracked so the exe ships with the repo
 build/
-dist/
 *.egg-info/
 
 # Testing and linting
