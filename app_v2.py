@@ -1,5 +1,6 @@
 import os
 import queue
+import tempfile
 import threading
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -34,6 +35,11 @@ class ImageConverterApp(ctk.CTk):
         # main loop) -- this replaces all cross-thread after() calls.
         self._ui_queue: queue.Queue = queue.Queue()
         self.after(50, self._drain_ui_queue)
+
+        # L14: keyboard shortcuts.
+        self.bind("<Return>", self._on_enter_key)
+        self.bind("<Control-o>", lambda _event: self.select_files())
+        self.bind("<Escape>", self._on_escape_key)
         
         self.create_layout()
 
@@ -349,6 +355,14 @@ class ImageConverterApp(ctk.CTk):
         self.update_preview_scroll_state()
         self.update_preview_header()
 
+    def _on_enter_key(self, _event):
+        if str(self.btn_convert.cget("state")) == "normal":
+            self.start_conversion_thread()
+
+    def _on_escape_key(self, _event):
+        if self.is_converting:
+            self.cancel_conversion()
+
     def _post_to_ui(self, func, *args):
         self._ui_queue.put((func, args))
 
@@ -522,12 +536,20 @@ class ImageConverterApp(ctk.CTk):
 
         if error_logs:
             self.lbl_status.configure(text="Completed with errors.", text_color="red")
-            error_details = "\n\n".join(error_logs[:8])
-            if len(error_logs) > 8:
-                error_details += f"\n\n...and {len(error_logs) - 8} more errors."
+            # L12: write the full report to disk; the dialog shows only a preview.
+            report_path = os.path.join(tempfile.gettempdir(), "universal_image_converter_errors.txt")
+            try:
+                with open(report_path, "w", encoding="utf-8") as f:
+                    f.write("\n\n".join(error_logs))
+                report_note = f"\n\nThe full error report was saved to:\n{report_path}"
+            except OSError:
+                report_note = ""
+            error_details = "\n\n".join(error_logs[:5])
+            if len(error_logs) > 5:
+                error_details += f"\n\n...and {len(error_logs) - 5} more errors."
             messagebox.showwarning(
                 "Conversion Issues",
-                f"Finished with {summary}.\n\nThe following errors occurred:\n\n{error_details}"
+                f"Finished with {summary}.{report_note}\n\nThe following errors occurred:\n\n{error_details}"
             )
         else:
             self.lbl_status.configure(text="Complete!", text_color="gray")
