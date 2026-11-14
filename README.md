@@ -1,12 +1,15 @@
 # Universal Image Converter
 
-A lightweight Windows desktop application for batch image conversion. It provides a dark, modern GUI for selecting images, reviewing a conversion queue, choosing an output folder, and converting files to WebP, PNG, or JPG.
+A lightweight Windows desktop application for batch image conversion. It provides a modern dark or light GUI for selecting images, reviewing a conversion queue, choosing an output folder, and converting files to WebP, PNG, or JPG.
 
 ## Features
 
 - Batch-select PNG, JPG, JPEG, WebP, and BMP images, or drag-and-drop files and folders from Explorer.
 - Preview selected images before processing (thumbnails load in the background).
-- Remove individual files from the queue.
+- Remove individual files from the queue with the ✕ button on each card.
+- Dark and light appearance, switchable under **Settings → Appearance** and remembered between sessions.
+- The left panel scrolls and the Convert/Stop buttons are pinned to the bottom, so every control stays reachable at any window size (minimum 720×500).
+- **Settings** and **Help** menus in the top bar: appearance mode, error-report access (**Help → Report issue...**), and app info (**Help → About**).
 - Convert images to WebP, PNG, or JPG in parallel across a thread pool.
 - Conversion options: quality slider, lossless WebP, max-dimension resize, EXIF metadata preservation, and an overwrite policy.
 - Existing outputs are never overwritten unless you enable **Overwrite existing files**; colliding outputs get `-1`, `-2`, ... suffixes.
@@ -35,7 +38,7 @@ Pillow performs the actual image decoding, so a file must be a valid image that 
 ### Output
 
 - WebP, saved at the quality slider's value (default 90, or lossless)
-- PNG
+- PNG (the quality slider is disabled; PNG quality is fixed)
 - JPG, saved at the quality slider's value (default 90)
 
 For JPG output, RGBA, palette, and grayscale+alpha images are converted to RGB. CMYK images are converted to RGB for PNG and WebP output. Palette PNGs keep their palette. EXIF orientation is applied automatically, so rotated phone photos come out upright; tick **Keep EXIF metadata** to preserve the remaining EXIF data. JPG output uses the `.jpg` extension for both `.jpg` and `.jpeg` source files.
@@ -118,8 +121,9 @@ The spec file bundles CustomTkinter resources and uses `logo.ico` as the applica
 
 ```text
 app_v2.py             Application UI
+ui_palette.py         Central light/dark color palette (theme switching)
 converter_core.py     Pure conversion logic (headlessly testable)
-tests/                pytest suite for converter_core
+tests/                pytest suite for converter_core and UI helpers
 app_v2.spec           PyInstaller build configuration
 requirements.txt      Runtime dependencies
 requirements-dev.txt  Development dependencies (pytest)
