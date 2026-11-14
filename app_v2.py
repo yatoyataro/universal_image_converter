@@ -27,6 +27,37 @@ ERROR_REPORT_PATH = os.path.join(tempfile.gettempdir(), "universal_image_convert
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+class Tooltip:
+    """Minimal hover tooltip for any widget, theme-aware via ui_palette."""
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self._tip = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _event=None):
+        if self._tip is not None or not self.text:
+            return
+        dark = 1 if ctk.get_appearance_mode().lower() == "dark" else 0
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self._tip = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw, text=self.text, justify="left", wraplength=440,
+            bg=ui_palette.CHIP_BG[dark], fg=ui_palette.CHIP_TEXT[dark],
+            padx=8, pady=4,
+        ).pack()
+
+    def _hide(self, _event=None):
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+
 class ImageConverterApp(
     ctk.CTk,
     *([TkinterDnD.DnDWrapper] if _DND_AVAILABLE else []),
@@ -192,6 +223,7 @@ class ImageConverterApp(
         
         self.lbl_out_dir = ctk.CTkLabel(self.controls_inner, text="Default: Source Folder", text_color=ui_palette.TEXT_FAINT, font=ctk.CTkFont(size=11))
         self.lbl_out_dir.grid(row=3, column=0, pady=(0, 4), sticky="w")
+        self._out_dir_tooltip = Tooltip(self.lbl_out_dir, "Default: source folder")
 
         # Recently used output folders (persisted in settings)
         self.recent_menu = ctk.CTkOptionMenu(
@@ -413,12 +445,24 @@ class ImageConverterApp(
 
     def _set_output_directory(self, folder):
         self.output_directory = folder
-        display_path = folder if len(folder) < 30 else f"...{folder[-27:]}"
-        self.lbl_out_dir.configure(text=f"Output: {display_path}")
+        self.lbl_out_dir.configure(text=f"Output: {self._ellipsis_middle(folder, 42)}")
+        self._out_dir_tooltip.text = folder  # hover shows the full path
         self.refresh_convert_button_state()
 
+    @staticmethod
+    def _ellipsis_middle(text, max_len):
+        """Middle-ellipsis: keep the drive/start and the folder/file name visible."""
+        if len(text) <= max_len:
+            return text
+        half = (max_len - 1) // 2
+        return f"{text[:half]}…{text[-half:]}"
+
     def _on_quality_change(self, value):
-        self.quality_value_label.configure(text=f"Quality: {int(value)}")
+        self._update_quality_label(int(value))
+
+    def _update_quality_label(self, quality):
+        suffix = " (n/a for PNG)" if self.get_target_extension() == "png" else ""
+        self.quality_value_label.configure(text=f"Quality: {quality}{suffix}")
 
     def _on_resize_toggle(self):
         self.entry_max_dim.configure(state="normal" if self.chk_resize.get() else "disabled")
@@ -506,10 +550,13 @@ class ImageConverterApp(
 
     def _refresh_recent_menu(self):
         if self._recent_dirs:
-            self.recent_menu.configure(values=list(self._recent_dirs))
+            self.recent_menu.configure(values=list(self._recent_dirs), state="normal")
             self.recent_menu.set(self._recent_dirs[0] if len(self._recent_dirs) == 1
                                  else "Recent folders")
         else:
+            # No history yet: show the placeholder disabled so it does not
+            # read as a selectable option.
+            self.recent_menu.configure(state="disabled")
             self.recent_menu.set("Recent folders")
 
     # --- Drag-and-drop (feature 1) ---
@@ -604,6 +651,17 @@ class ImageConverterApp(
                     card["details"].configure(text=f"Ready for {display_name} conversion")
             except Exception:
                 pass
+        self._update_quality_label(int(self.quality_slider.get()))
+        self._update_option_sensitivity()
+
+    def _update_option_sensitivity(self):
+        """Grey out options the selected target format ignores."""
+        ext = self.get_target_extension()
+        quality_state = "disabled" if ext == "png" else "normal"
+        self.quality_slider.configure(state=quality_state)
+        self.quality_value_label.configure(state=quality_state)
+        # Lossless encoding only exists for WebP.
+        self.chk_lossless.configure(state="normal" if ext == "webp" else "disabled")
 
     def remove_selected_file(self, file_path):
         if self.is_converting:
@@ -694,15 +752,19 @@ class ImageConverterApp(
 
             remove_button = ctk.CTkButton(
                 item_frame,
-                text="Remove",
-                width=94,
+                text="✕",
+                width=34,
                 height=34,
-                corner_radius=10,
-                fg_color=ui_palette.DANGER,
-                hover_color=ui_palette.DANGER_HOVER,
+                corner_radius=8,
+                fg_color="transparent",
+                border_width=1,
+                border_color=ui_palette.BORDER_NESTED,
+                text_color=ui_palette.TEXT_MUTED,
+                hover_color=ui_palette.CHIP_BG,
                 command=lambda file_path=path: self.remove_selected_file(file_path)
             )
             remove_button.grid(row=0, column=2, rowspan=2, sticky="e", padx=12, pady=12)
+            Tooltip(remove_button, "Remove from queue")
             self.remove_buttons.append(remove_button)
 
             self._preview_cards[path] = {
