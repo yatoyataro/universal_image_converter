@@ -33,7 +33,9 @@ class ImageConverterApp(
         
         self.title("Universal Image Converter")
         self.geometry("1100x700")
-        self.minsize(980, 640)
+        # Small enough to snap to half of a 1440p-wide display; the scrollable
+        # left panel keeps every control reachable below this.
+        self.minsize(720, 500)
         self.resizable(True, True)
         self.configure(fg_color=ui_palette.BG_WINDOW)
         
@@ -76,11 +78,24 @@ class ImageConverterApp(
         self.workspace.grid_columnconfigure(1, weight=1)
 
         # --- Left Panel: Controls ---
+        # Row 0 scrolls (all configuration); row 1 is a pinned action bar so
+        # progress/status/Convert/Stop stay reachable at any window size.
         self.left_frame = ctk.CTkFrame(self.workspace, width=330, corner_radius=24, fg_color=ui_palette.BG_PANEL, border_width=1, border_color=ui_palette.BORDER_PANEL)
         self.left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 14), pady=0)
         self.left_frame.grid_columnconfigure(0, weight=1)
-        
-        self.left_content = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        self.left_frame.grid_rowconfigure(0, weight=1)
+        self.left_frame.grid_rowconfigure(1, weight=0)
+
+        self.left_scroll = ctk.CTkScrollableFrame(
+            self.left_frame,
+            fg_color=ui_palette.BG_PANEL,
+            corner_radius=0,
+            border_width=0,
+        )
+        self.left_scroll.grid(row=0, column=0, sticky="nsew")
+        self.left_scroll.grid_columnconfigure(0, weight=1)
+
+        self.left_content = ctk.CTkFrame(self.left_scroll, fg_color="transparent")
         self.left_content.grid(row=0, column=0, sticky="nsew", padx=22, pady=22)
         self.left_content.grid_columnconfigure(0, weight=1)
 
@@ -173,18 +188,23 @@ class ImageConverterApp(
         self.radio_png.grid(row=7, column=0, pady=(0, 6), sticky="w")
         self.radio_jpg.grid(row=8, column=0, pady=(0, 12), sticky="w")
 
-        self.progress_bar = ctk.CTkProgressBar(self.controls_inner)
-        self.progress_bar.grid(row=9, column=0, pady=(10, 6), sticky="ew")
+        # --- Pinned action bar (always visible, never scrolls) ---
+        self.bottom_bar = ctk.CTkFrame(self.left_frame, fg_color="transparent")
+        self.bottom_bar.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 22))
+        self.bottom_bar.grid_columnconfigure(0, weight=1)
+
+        self.progress_bar = ctk.CTkProgressBar(self.bottom_bar)
+        self.progress_bar.grid(row=0, column=0, pady=(0, 6), sticky="ew")
         self.progress_bar.set(0)
 
-        self.lbl_status = ctk.CTkLabel(self.controls_inner, text="Ready", text_color=ui_palette.TEXT_FAINT)
-        self.lbl_status.grid(row=10, column=0, pady=(0, 8), sticky="w")
+        self.lbl_status = ctk.CTkLabel(self.bottom_bar, text="Ready", text_color=ui_palette.TEXT_FAINT)
+        self.lbl_status.grid(row=1, column=0, pady=(0, 8), sticky="w")
 
-        self.btn_convert = ctk.CTkButton(self.controls_inner, text="Start Conversion", command=self.start_conversion_thread, state="disabled", height=44, font=ctk.CTkFont(weight="bold"))
-        self.btn_convert.grid(row=11, column=0, pady=(8, 0), sticky="ew")
+        self.btn_convert = ctk.CTkButton(self.bottom_bar, text="Start Conversion", command=self.start_conversion_thread, state="disabled", height=44, font=ctk.CTkFont(weight="bold"))
+        self.btn_convert.grid(row=2, column=0, pady=(0, 0), sticky="ew")
 
         self.btn_cancel = ctk.CTkButton(
-            self.controls_inner,
+            self.bottom_bar,
             text="Stop",
             command=self.cancel_conversion,
             height=36,
@@ -192,7 +212,7 @@ class ImageConverterApp(
             hover_color=ui_palette.DANGER_HOVER,
         )
         # Hidden until a conversion is running (M10).
-        self.btn_cancel.grid(row=12, column=0, pady=(8, 0), sticky="ew")
+        self.btn_cancel.grid(row=2, column=0, pady=(0, 0), sticky="ew")
         self.btn_cancel.grid_remove()
 
         # --- Right Panel: Image Preview ---
