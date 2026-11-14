@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image
 
+import ui_palette
 from converter_core import ConvertOptions, convert_files, describe_error
 
 try:
@@ -18,7 +19,8 @@ except ImportError:  # drag-and-drop stays optional
 
 SUPPORTED_INPUT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
-# Set modern dark theme
+# Default appearance; _load_settings() overrides this from the saved
+# preference. All widget colors are (light, dark) tuples from ui_palette.
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -33,7 +35,7 @@ class ImageConverterApp(
         self.geometry("1100x700")
         self.minsize(980, 640)
         self.resizable(True, True)
-        self.configure(fg_color="#111111")
+        self.configure(fg_color=ui_palette.BG_WINDOW)
         
         self.selected_files = []
         self.output_directory = ""
@@ -74,7 +76,7 @@ class ImageConverterApp(
         self.workspace.grid_columnconfigure(1, weight=1)
 
         # --- Left Panel: Controls ---
-        self.left_frame = ctk.CTkFrame(self.workspace, width=330, corner_radius=24, fg_color="#1b1b1b", border_width=1, border_color="#2d2d2d")
+        self.left_frame = ctk.CTkFrame(self.workspace, width=330, corner_radius=24, fg_color=ui_palette.BG_PANEL, border_width=1, border_color=ui_palette.BORDER_PANEL)
         self.left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 14), pady=0)
         self.left_frame.grid_columnconfigure(0, weight=1)
         
@@ -87,12 +89,12 @@ class ImageConverterApp(
         self.subtitle_label = ctk.CTkLabel(
             self.left_content,
             text="Select, preview, remove, and convert",
-            text_color="#9a9a9a",
+            text_color=ui_palette.TEXT_MUTED,
             font=ctk.CTkFont(size=11)
         )
         self.subtitle_label.grid(row=1, column=0, sticky="w", pady=(0, 18))
 
-        self.controls_card = ctk.CTkFrame(self.left_content, fg_color="#202020", corner_radius=18, border_width=1, border_color="#2f2f2f")
+        self.controls_card = ctk.CTkFrame(self.left_content, fg_color=ui_palette.BG_CARD, corner_radius=18, border_width=1, border_color=ui_palette.BORDER_CARD)
         self.controls_card.grid(row=2, column=0, sticky="nsew")
         self.controls_card.grid_columnconfigure(0, weight=1)
 
@@ -101,7 +103,7 @@ class ImageConverterApp(
         self.controls_inner.grid_columnconfigure(0, weight=1)
 
         # --- Options card (Step 4 features) ---
-        self.options_card = ctk.CTkFrame(self.left_content, fg_color="#202020", corner_radius=18, border_width=1, border_color="#2f2f2f")
+        self.options_card = ctk.CTkFrame(self.left_content, fg_color=ui_palette.BG_CARD, corner_radius=18, border_width=1, border_color=ui_palette.BORDER_CARD)
         self.options_card.grid(row=3, column=0, sticky="nsew", pady=(14, 0))
         self.options_card.grid_columnconfigure(0, weight=1)
 
@@ -126,7 +128,7 @@ class ImageConverterApp(
         self.entry_max_dim.insert(0, "1920")
         self.entry_max_dim.configure(state="disabled")
         self.entry_max_dim.pack(side="left", padx=(10, 4))
-        ctk.CTkLabel(resize_row, text="px", text_color="#9a9a9a", font=ctk.CTkFont(size=11)).pack(side="left")
+        ctk.CTkLabel(resize_row, text="px", text_color=ui_palette.TEXT_MUTED, font=ctk.CTkFont(size=11)).pack(side="left")
 
         self.chk_metadata = ctk.CTkCheckBox(options_inner, text="Keep EXIF metadata", checkbox_width=18, checkbox_height=18)
         self.chk_metadata.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
@@ -135,17 +137,17 @@ class ImageConverterApp(
         self.chk_overwrite.grid(row=5, column=0, columnspan=2, sticky="w")
 
         # Select Files
-        self.btn_select = ctk.CTkButton(self.controls_inner, text="Select Images", command=self.select_files, fg_color="#2EA043", hover_color="#237A32", height=40)
+        self.btn_select = ctk.CTkButton(self.controls_inner, text="Select Images", command=self.select_files, fg_color=ui_palette.ACCENT, hover_color=ui_palette.ACCENT_HOVER, height=40)
         self.btn_select.grid(row=0, column=0, pady=(0, 10), sticky="ew")
         
-        self.lbl_count = ctk.CTkLabel(self.controls_inner, text="0 files selected", text_color="#a5a5a5")
+        self.lbl_count = ctk.CTkLabel(self.controls_inner, text="0 files selected", text_color=ui_palette.TEXT_FAINT)
         self.lbl_count.grid(row=1, column=0, pady=(0, 10), sticky="w")
 
         # Select Output Directory
-        self.btn_out_dir = ctk.CTkButton(self.controls_inner, text="Choose Output Folder", command=self.select_output_dir, fg_color="transparent", border_width=1, border_color="#4a4a4a", text_color=("gray10", "gray90"), height=40)
+        self.btn_out_dir = ctk.CTkButton(self.controls_inner, text="Choose Output Folder", command=self.select_output_dir, fg_color="transparent", border_width=1, border_color=ui_palette.BORDER_INPUT, text_color=("gray10", "gray90"), height=40)
         self.btn_out_dir.grid(row=2, column=0, pady=(0, 8), sticky="ew")
         
-        self.lbl_out_dir = ctk.CTkLabel(self.controls_inner, text="Default: Source Folder", text_color="#a5a5a5", font=ctk.CTkFont(size=11))
+        self.lbl_out_dir = ctk.CTkLabel(self.controls_inner, text="Default: Source Folder", text_color=ui_palette.TEXT_FAINT, font=ctk.CTkFont(size=11))
         self.lbl_out_dir.grid(row=3, column=0, pady=(0, 4), sticky="w")
 
         # Recently used output folders (persisted in settings)
@@ -175,7 +177,7 @@ class ImageConverterApp(
         self.progress_bar.grid(row=9, column=0, pady=(10, 6), sticky="ew")
         self.progress_bar.set(0)
 
-        self.lbl_status = ctk.CTkLabel(self.controls_inner, text="Ready", text_color="#a5a5a5")
+        self.lbl_status = ctk.CTkLabel(self.controls_inner, text="Ready", text_color=ui_palette.TEXT_FAINT)
         self.lbl_status.grid(row=10, column=0, pady=(0, 8), sticky="w")
 
         self.btn_convert = ctk.CTkButton(self.controls_inner, text="Start Conversion", command=self.start_conversion_thread, state="disabled", height=44, font=ctk.CTkFont(weight="bold"))
@@ -186,20 +188,20 @@ class ImageConverterApp(
             text="Stop",
             command=self.cancel_conversion,
             height=36,
-            fg_color="#B93838",
-            hover_color="#9B2C2C",
+            fg_color=ui_palette.DANGER,
+            hover_color=ui_palette.DANGER_HOVER,
         )
         # Hidden until a conversion is running (M10).
         self.btn_cancel.grid(row=12, column=0, pady=(8, 0), sticky="ew")
         self.btn_cancel.grid_remove()
 
         # --- Right Panel: Image Preview ---
-        self.right_frame = ctk.CTkFrame(self.workspace, fg_color="#151515", corner_radius=24, border_width=1, border_color="#2d2d2d")
+        self.right_frame = ctk.CTkFrame(self.workspace, fg_color=ui_palette.BG_PANEL_ALT, corner_radius=24, border_width=1, border_color=ui_palette.BORDER_PANEL)
         self.right_frame.grid(row=0, column=1, sticky="nsew", padx=(0, 0), pady=0)
         self.right_frame.grid_rowconfigure(0, weight=1)
         self.right_frame.grid_columnconfigure(0, weight=1)
 
-        self.preview_shell = ctk.CTkFrame(self.right_frame, fg_color="#202020", corner_radius=18, border_width=1, border_color="#2f2f2f")
+        self.preview_shell = ctk.CTkFrame(self.right_frame, fg_color=ui_palette.BG_CARD, corner_radius=18, border_width=1, border_color=ui_palette.BORDER_CARD)
         self.preview_shell.grid(row=0, column=0, sticky="nsew", padx=18, pady=18)
         self.preview_shell.grid_rowconfigure(1, weight=1)
         self.preview_shell.grid_columnconfigure(0, weight=1)
@@ -211,7 +213,7 @@ class ImageConverterApp(
         self.preview_label = ctk.CTkLabel(self.preview_header, text="Image Queue", font=ctk.CTkFont(size=20, weight="bold"))
         self.preview_label.grid(row=0, column=0, sticky="w")
 
-        self.preview_meta_label = ctk.CTkLabel(self.preview_header, text="No images selected", text_color="#9a9a9a", font=ctk.CTkFont(size=11))
+        self.preview_meta_label = ctk.CTkLabel(self.preview_header, text="No images selected", text_color=ui_palette.TEXT_MUTED, font=ctk.CTkFont(size=11))
         self.preview_meta_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
         self.preview_count_chip = ctk.CTkLabel(
@@ -220,13 +222,13 @@ class ImageConverterApp(
             width=84,
             height=28,
             corner_radius=999,
-            fg_color="#2a2a2a",
-            text_color="#d7d7d7",
+            fg_color=ui_palette.CHIP_BG,
+            text_color=ui_palette.CHIP_TEXT,
             font=ctk.CTkFont(size=11, weight="bold")
         )
         self.preview_count_chip.grid(row=0, column=1, rowspan=2, sticky="e")
 
-        self.scrollable_frame = ctk.CTkScrollableFrame(self.preview_shell, fg_color="#202020", corner_radius=0)
+        self.scrollable_frame = ctk.CTkScrollableFrame(self.preview_shell, fg_color=ui_palette.BG_CARD, corner_radius=0)
         self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
         self.update_preview_scroll_state()
 
@@ -295,6 +297,10 @@ class ImageConverterApp(
         except (OSError, ValueError):
             return
         try:
+            # Theme: applied before anything else so widgets build in the
+            # right mode; color tuples do the rest of the work.
+            appearance = str(data.get("appearance", "dark")).lower()
+            ctk.set_appearance_mode("dark" if appearance == "dark" else "light")
             self.target_format.set(data.get("target_format", "webp"))
             quality = min(100, max(1, int(data.get("quality", 90))))
             self.quality_slider.set(quality)
@@ -315,6 +321,7 @@ class ImageConverterApp(
 
     def _save_settings(self):
         data = {
+            "appearance": ctk.get_appearance_mode().lower(),
             "target_format": self.target_format.get(),
             "quality": int(self.quality_slider.get()),
             "lossless": bool(self.chk_lossless.get()),
@@ -466,7 +473,7 @@ class ImageConverterApp(
         self._preview_cards = {}
 
         if not self.selected_files:
-            self.preview_empty_state_frame = ctk.CTkFrame(self.scrollable_frame, fg_color="#252525", corner_radius=16, border_width=1, border_color="#333333")
+            self.preview_empty_state_frame = ctk.CTkFrame(self.scrollable_frame, fg_color=ui_palette.EMPTY_BG, corner_radius=16, border_width=1, border_color=ui_palette.EMPTY_BORDER)
             self.preview_empty_state_frame.pack(fill="both", expand=True, padx=8, pady=8)
             self.preview_empty_state_frame.grid_columnconfigure(0, weight=1)
             self.preview_empty_state_frame.grid_rowconfigure(0, weight=1)
@@ -477,7 +484,7 @@ class ImageConverterApp(
             empty_message = ctk.CTkLabel(
                 self.preview_empty_state_frame,
                 text="Pick images on the left to build the conversion queue.",
-                text_color="#9a9a9a",
+                text_color=ui_palette.TEXT_MUTED,
                 font=ctk.CTkFont(size=11)
             )
             empty_message.grid(row=1, column=0, sticky="n")
@@ -491,20 +498,20 @@ class ImageConverterApp(
         for path in self.selected_files:
             item_frame = ctk.CTkFrame(
                 self.scrollable_frame,
-                fg_color="#262626",
+                fg_color=ui_palette.BG_NESTED,
                 corner_radius=16,
                 border_width=1,
-                border_color="#343434"
+                border_color=ui_palette.BORDER_NESTED
             )
             item_frame.pack(side="top", fill="x", pady=(0, 12), padx=4)
             item_frame.grid_columnconfigure(1, weight=1)
 
-            preview_wrap = ctk.CTkFrame(item_frame, fg_color="#1f1f1f", corner_radius=12, width=132, height=132)
+            preview_wrap = ctk.CTkFrame(item_frame, fg_color=ui_palette.BG_THUMB, corner_radius=12, width=132, height=132)
             preview_wrap.grid(row=0, column=0, rowspan=2, sticky="w", padx=12, pady=12)
             preview_wrap.grid_propagate(False)
 
             img_label = ctk.CTkLabel(preview_wrap, text="", font=ctk.CTkFont(size=10))
-            img_label.configure(text_color="#7a7a7a")
+            img_label.configure(text_color=ui_palette.TEXT_FAINT)
             img_label.place(relx=0.5, rely=0.5, anchor="center")
 
             name_label = ctk.CTkLabel(
@@ -520,7 +527,7 @@ class ImageConverterApp(
             details_label = ctk.CTkLabel(
                 item_frame,
                 text="Loading preview..." if self.is_converting is False else f"Ready for {self.get_target_display_name()} conversion",
-                text_color="#9a9a9a",
+                text_color=ui_palette.TEXT_MUTED,
                 font=ctk.CTkFont(size=11),
                 anchor="w",
                 justify="left"
@@ -533,8 +540,8 @@ class ImageConverterApp(
                 width=94,
                 height=34,
                 corner_radius=10,
-                fg_color="#B93838",
-                hover_color="#9B2C2C",
+                fg_color=ui_palette.DANGER,
+                hover_color=ui_palette.DANGER_HOVER,
                 command=lambda file_path=path: self.remove_selected_file(file_path)
             )
             remove_button.grid(row=0, column=2, rowspan=2, sticky="e", padx=12, pady=12)
@@ -620,11 +627,11 @@ class ImageConverterApp(
             return
         try:
             reason, _ = describe_error(exc)
-            card["frame"].configure(fg_color="#2b2320", border_color="#8a5a2a")
-            card["img_label"].configure(text="!", text_color="#c9a227")
+            card["frame"].configure(fg_color=ui_palette.WARNING_BG, border_color=ui_palette.WARNING_BORDER)
+            card["img_label"].configure(text="!", text_color=ui_palette.WARNING_TEXT)
             card["details"].configure(
                 text=f"{reason} The file stays in the queue and will still be converted.",
-                text_color="#c9a227",
+                text_color=ui_palette.WARNING_TEXT,
                 wraplength=420,
             )
         except Exception:
