@@ -1,3 +1,4 @@
+import json
 import os
 import queue
 import tempfile
@@ -6,13 +7,24 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from PIL import Image
 
-from converter_core import convert_files, describe_error
+from converter_core import ConvertOptions, convert_files, describe_error
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    _DND_AVAILABLE = True
+except ImportError:  # drag-and-drop stays optional
+    _DND_AVAILABLE = False
+
+SUPPORTED_INPUT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 # Set modern dark theme
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-class ImageConverterApp(ctk.CTk):
+class ImageConverterApp(
+    ctk.CTk,
+    *([TkinterDnD.DnDWrapper] if _DND_AVAILABLE else []),
+):
     def __init__(self):
         super().__init__()
         
@@ -29,6 +41,8 @@ class ImageConverterApp(ctk.CTk):
         self.remove_buttons = []
         self.cancel_event = threading.Event()
         self._preview_generation = 0
+        self._preview_cards = {}
+        self._recent_dirs: list[str] = []
         # Thread-safe bridge: workers put (callable, args) here and the
         # main-thread poller executes them. Calling tkinter from worker
         # threads directly is unsafe (RuntimeError: main thread is not in
@@ -40,8 +54,12 @@ class ImageConverterApp(ctk.CTk):
         self.bind("<Return>", self._on_enter_key)
         self.bind("<Control-o>", lambda _event: self.select_files())
         self.bind("<Escape>", self._on_escape_key)
-        
+
         self.create_layout()
+
+        # Must run after create_layout: these touch widgets.
+        self._setup_drag_and_drop()
+        self._load_settings()
 
     def create_layout(self):
         self.grid_rowconfigure(0, weight=1)
@@ -80,7 +98,41 @@ class ImageConverterApp(ctk.CTk):
         self.controls_inner = ctk.CTkFrame(self.controls_card, fg_color="transparent")
         self.controls_inner.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
         self.controls_inner.grid_columnconfigure(0, weight=1)
-        
+
+        # --- Options card (Step 4 features) ---
+        self.options_card = ctk.CTkFrame(self.left_content, fg_color="#202020", corner_radius=18, border_width=1, border_color="#2f2f2f")
+        self.options_card.grid(row=3, column=0, sticky="nsew", pady=(14, 0))
+        self.options_card.grid_columnconfigure(0, weight=1)
+
+        options_inner = ctk.CTkFrame(self.options_card, fg_color="transparent")
+        options_inner.grid(row=0, column=0, sticky="nsew", padx=16, pady=14)
+        options_inner.grid_columnconfigure(1, weight=1)
+
+        self.quality_value_label = ctk.CTkLabel(options_inner, text="Quality: 90", font=ctk.CTkFont(size=12))
+        self.quality_value_label.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        self.quality_slider = ctk.CTkSlider(options_inner, from_=1, to=100, number_of_steps=99, command=self._on_quality_change)
+        self.quality_slider.set(90)
+        self.quality_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
+        self.chk_lossless = ctk.CTkCheckBox(options_inner, text="Lossless WebP", checkbox_width=18, checkbox_height=18)
+        self.chk_lossless.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        resize_row = ctk.CTkFrame(options_inner, fg_color="transparent")
+        resize_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self.chk_resize = ctk.CTkCheckBox(resize_row, text="Resize max", checkbox_width=18, checkbox_height=18, command=self._on_resize_toggle)
+        self.chk_resize.pack(side="left")
+        self.entry_max_dim = ctk.CTkEntry(resize_row, width=58, placeholder_text="1920")
+        self.entry_max_dim.insert(0, "1920")
+        self.entry_max_dim.configure(state="disabled")
+        self.entry_max_dim.pack(side="left", padx=(10, 4))
+        ctk.CTkLabel(resize_row, text="px", text_color="#9a9a9a", font=ctk.CTkFont(size=11)).pack(side="left")
+
+        self.chk_metadata = ctk.CTkCheckBox(options_inner, text="Keep EXIF metadata", checkbox_width=18, checkbox_height=18)
+        self.chk_metadata.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        self.chk_overwrite = ctk.CTkCheckBox(options_inner, text="Overwrite existing files", checkbox_width=18, checkbox_height=18)
+        self.chk_overwrite.grid(row=5, column=0, columnspan=2, sticky="w")
+
         # Select Files
         self.btn_select = ctk.CTkButton(self.controls_inner, text="Select Images", command=self.select_files, fg_color="#2EA043", hover_color="#237A32", height=40)
         self.btn_select.grid(row=0, column=0, pady=(0, 10), sticky="ew")
@@ -93,11 +145,20 @@ class ImageConverterApp(ctk.CTk):
         self.btn_out_dir.grid(row=2, column=0, pady=(0, 8), sticky="ew")
         
         self.lbl_out_dir = ctk.CTkLabel(self.controls_inner, text="Default: Source Folder", text_color="#a5a5a5", font=ctk.CTkFont(size=11))
-        self.lbl_out_dir.grid(row=3, column=0, pady=(0, 18), sticky="w")
+        self.lbl_out_dir.grid(row=3, column=0, pady=(0, 4), sticky="w")
+
+        # Recently used output folders (persisted in settings)
+        self.recent_menu = ctk.CTkOptionMenu(
+            self.controls_inner,
+            values=["Recent folders"],
+            command=self._on_recent_dir_pick,
+            height=32,
+        )
+        self.recent_menu.grid(row=4, column=0, pady=(0, 14), sticky="ew")
 
         # Target Format Selection
         self.format_label = ctk.CTkLabel(self.controls_inner, text="Target Format", font=ctk.CTkFont(weight="bold", size=13))
-        self.format_label.grid(row=4, column=0, pady=(0, 10), sticky="w")
+        self.format_label.grid(row=5, column=0, pady=(0, 10), sticky="w")
         
         self.target_format = ctk.StringVar(value="webp")
         self.target_format.trace_add("write", self.on_target_format_change)
@@ -105,19 +166,19 @@ class ImageConverterApp(ctk.CTk):
         self.radio_png = ctk.CTkRadioButton(self.controls_inner, text="PNG", variable=self.target_format, value="png")
         self.radio_jpg = ctk.CTkRadioButton(self.controls_inner, text="JPG (.jpg)", variable=self.target_format, value="jpg")
         
-        self.radio_webp.grid(row=5, column=0, pady=(0, 6), sticky="w")
-        self.radio_png.grid(row=6, column=0, pady=(0, 6), sticky="w")
-        self.radio_jpg.grid(row=7, column=0, pady=(0, 12), sticky="w")
+        self.radio_webp.grid(row=6, column=0, pady=(0, 6), sticky="w")
+        self.radio_png.grid(row=7, column=0, pady=(0, 6), sticky="w")
+        self.radio_jpg.grid(row=8, column=0, pady=(0, 12), sticky="w")
 
         self.progress_bar = ctk.CTkProgressBar(self.controls_inner)
-        self.progress_bar.grid(row=8, column=0, pady=(10, 6), sticky="ew")
+        self.progress_bar.grid(row=9, column=0, pady=(10, 6), sticky="ew")
         self.progress_bar.set(0)
-        
+
         self.lbl_status = ctk.CTkLabel(self.controls_inner, text="Ready", text_color="#a5a5a5")
-        self.lbl_status.grid(row=9, column=0, pady=(0, 8), sticky="w")
-        
+        self.lbl_status.grid(row=10, column=0, pady=(0, 8), sticky="w")
+
         self.btn_convert = ctk.CTkButton(self.controls_inner, text="Start Conversion", command=self.start_conversion_thread, state="disabled", height=44, font=ctk.CTkFont(weight="bold"))
-        self.btn_convert.grid(row=10, column=0, pady=(8, 0), sticky="ew")
+        self.btn_convert.grid(row=11, column=0, pady=(8, 0), sticky="ew")
 
         self.btn_cancel = ctk.CTkButton(
             self.controls_inner,
@@ -128,7 +189,7 @@ class ImageConverterApp(ctk.CTk):
             hover_color="#9B2C2C",
         )
         # Hidden until a conversion is running (M10).
-        self.btn_cancel.grid(row=11, column=0, pady=(8, 0), sticky="ew")
+        self.btn_cancel.grid(row=12, column=0, pady=(8, 0), sticky="ew")
         self.btn_cancel.grid_remove()
 
         # --- Right Panel: Image Preview ---
@@ -178,6 +239,7 @@ class ImageConverterApp(ctk.CTk):
         if files:
             self.selected_files = list(files)
             self.lbl_count.configure(text=f"{len(self.selected_files)} file(s) selected")
+            self.btn_convert.configure(text="Start Conversion")
             self.load_previews()
             self.progress_bar.set(0)
             self.lbl_status.configure(text="Ready")
@@ -186,10 +248,143 @@ class ImageConverterApp(ctk.CTk):
     def select_output_dir(self):
         folder = filedialog.askdirectory(title="Select Output Folder")
         if folder:
-            self.output_directory = folder
-            display_path = folder if len(folder) < 30 else f"...{folder[-27:]}"
-            self.lbl_out_dir.configure(text=f"Output: {display_path}")
-            self.refresh_convert_button_state()
+            self._set_output_directory(folder)
+
+    def _set_output_directory(self, folder):
+        self.output_directory = folder
+        display_path = folder if len(folder) < 30 else f"...{folder[-27:]}"
+        self.lbl_out_dir.configure(text=f"Output: {display_path}")
+        self.refresh_convert_button_state()
+
+    def _on_quality_change(self, value):
+        self.quality_value_label.configure(text=f"Quality: {int(value)}")
+
+    def _on_resize_toggle(self):
+        self.entry_max_dim.configure(state="normal" if self.chk_resize.get() else "disabled")
+
+    def _on_recent_dir_pick(self, choice):
+        if choice != "Recent folders" and os.path.isdir(choice):
+            self._set_output_directory(choice)
+
+    def _collect_options(self) -> ConvertOptions:
+        max_dim = None
+        if self.chk_resize.get():
+            try:
+                max_dim = max(1, int(self.entry_max_dim.get()))
+            except ValueError:
+                max_dim = 1920
+        return ConvertOptions(
+            quality=int(self.quality_slider.get()),
+            lossless_webp=bool(self.chk_lossless.get()),
+            max_dimension=max_dim,
+            keep_metadata=bool(self.chk_metadata.get()),
+            overwrite=bool(self.chk_overwrite.get()),
+        )
+
+    # --- Settings persistence (feature 7) ---
+
+    def _settings_path(self):
+        base = os.environ.get("APPDATA") or tempfile.gettempdir()
+        return os.path.join(base, "UniversalImageConverter", "settings.json")
+
+    def _load_settings(self):
+        try:
+            with open(self._settings_path(), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        try:
+            self.target_format.set(data.get("target_format", "webp"))
+            quality = min(100, max(1, int(data.get("quality", 90))))
+            self.quality_slider.set(quality)
+            self.quality_value_label.configure(text=f"Quality: {quality}")
+            for key, var in (("lossless", self.chk_lossless),
+                             ("resize", self.chk_resize),
+                             ("keep_metadata", self.chk_metadata),
+                             ("overwrite", self.chk_overwrite)):
+                (var.select if data.get(key) else var.deselect)()
+            self._on_resize_toggle()
+            self._recent_dirs = [d for d in data.get("recent_dirs", []) if os.path.isdir(d)][:5]
+            self._refresh_recent_menu()
+            last_dir = data.get("output_dir")
+            if last_dir and os.path.isdir(last_dir):
+                self._set_output_directory(last_dir)
+        except Exception:
+            pass  # corrupted settings must never block startup
+
+    def _save_settings(self):
+        data = {
+            "target_format": self.target_format.get(),
+            "quality": int(self.quality_slider.get()),
+            "lossless": bool(self.chk_lossless.get()),
+            "resize": bool(self.chk_resize.get()),
+            "max_dimension": self.entry_max_dim.get(),
+            "keep_metadata": bool(self.chk_metadata.get()),
+            "overwrite": bool(self.chk_overwrite.get()),
+            "output_dir": self.output_directory,
+            "recent_dirs": self._recent_dirs,
+        }
+        try:
+            os.makedirs(os.path.dirname(self._settings_path()), exist_ok=True)
+            with open(self._settings_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    def _remember_recent_dir(self, folder):
+        if folder in self._recent_dirs:
+            self._recent_dirs.remove(folder)
+        self._recent_dirs.insert(0, folder)
+        self._recent_dirs = self._recent_dirs[:5]
+        self._refresh_recent_menu()
+
+    def _refresh_recent_menu(self):
+        if self._recent_dirs:
+            self.recent_menu.configure(values=list(self._recent_dirs))
+            self.recent_menu.set(self._recent_dirs[0] if len(self._recent_dirs) == 1
+                                 else "Recent folders")
+        else:
+            self.recent_menu.set("Recent folders")
+
+    # --- Drag-and-drop (feature 1) ---
+
+    def _setup_drag_and_drop(self):
+        if not _DND_AVAILABLE:
+            return
+        try:
+            TkinterDnD._require(self)
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind("<<Drop>>", self._on_drop)
+            self.subtitle_label.configure(
+                text="Select, preview, remove, and convert (or drop files here)")
+        except Exception:
+            pass  # the file picker remains fully functional without dnd
+
+    def _on_drop(self, event):
+        if self.is_converting:
+            return
+        try:
+            raw_paths = self.tk.splitlist(event.data)
+        except Exception:
+            return
+        added = []
+        for raw in raw_paths:
+            path = os.path.normpath(raw)
+            if os.path.isdir(path):
+                for name in sorted(os.listdir(path)):
+                    full = os.path.join(path, name)
+                    if os.path.isfile(full) and os.path.splitext(name)[1].lower() in SUPPORTED_INPUT_EXTS:
+                        added.append(full)
+            elif os.path.isfile(path) and os.path.splitext(path)[1].lower() in SUPPORTED_INPUT_EXTS:
+                added.append(path)
+        added = [p for p in added if p not in self.selected_files]
+        if not added:
+            self.lbl_status.configure(text="Drop contained no supported images.")
+            return
+        self.selected_files.extend(added)
+        self.lbl_count.configure(text=f"{len(self.selected_files)} file(s) selected")
+        self.load_previews()
+        self.refresh_convert_button_state()
 
     def refresh_convert_button_state(self):
         if self.selected_files and self.output_directory:
@@ -233,8 +428,16 @@ class ImageConverterApp(ctk.CTk):
         ])
 
     def on_target_format_change(self, *_):
-        if self.selected_files:
-            self.load_previews()
+        # Update the per-item labels in place instead of rebuilding the
+        # whole preview list on every radio click.
+        display_name = self.get_target_display_name()
+        for card in self._preview_cards.values():
+            try:
+                details = card["details"].cget("text")
+                if "Ready for" in details:
+                    card["details"].configure(text=f"Ready for {display_name} conversion")
+            except Exception:
+                pass
 
     def remove_selected_file(self, file_path):
         if self.is_converting:
@@ -250,6 +453,7 @@ class ImageConverterApp(ctk.CTk):
             self.clear_previews()
             self.progress_bar.set(0)
             self.lbl_status.configure(text="Ready")
+            self.btn_convert.configure(text="Start Conversion")
 
         self.update_preview_header()
         self.refresh_convert_button_state()
@@ -461,6 +665,10 @@ class ImageConverterApp(ctk.CTk):
         files = list(self.selected_files)
         target_ext = self.get_target_extension()
         output_dir = self.output_directory
+        options = self._collect_options()
+
+        self._remember_recent_dir(output_dir)
+        self._save_settings()
 
         self.is_converting = True
         self.cancel_event.clear()
@@ -477,7 +685,7 @@ class ImageConverterApp(ctk.CTk):
 
         thread = threading.Thread(
             target=self.process_images,
-            args=(files, target_ext, output_dir),
+            args=(files, target_ext, output_dir, options),
             daemon=True,
         )
         thread.start()
@@ -493,7 +701,7 @@ class ImageConverterApp(ctk.CTk):
         self.progress_bar.set(progress_val)
         self.lbl_status.configure(text=status_text)
 
-    def process_images(self, files, target_ext, output_dir):
+    def process_images(self, files, target_ext, output_dir, options):
         total_files = len(files)
         max_workers = min(4, os.cpu_count() or 1)
 
@@ -505,6 +713,7 @@ class ImageConverterApp(ctk.CTk):
             cancel_event=self.cancel_event,
             progress_callback=lambda done, total: self._post_to_ui(
                 self.sync_ui_progress, done / total, f"Processing: {done}/{total}"),
+            options=options,
         )
         error_logs = [self.build_error_log(path, exc) for path, exc in batch.errors]
         self._post_to_ui(self.finish_conversion, batch, total_files, error_logs)
@@ -520,9 +729,19 @@ class ImageConverterApp(ctk.CTk):
         for button in self.remove_buttons:
             button.configure(state="normal")
         self.refresh_convert_button_state()
-        self.lbl_count.configure(text="0 files selected")
-        self.selected_files = []
+
+        # Feature 6: keep only the failures in the queue for a one-click retry.
+        failed_paths = [str(path) for path, _ in batch.errors]
+        if failed_paths:
+            self.selected_files = failed_paths
+            self.lbl_count.configure(text=f"{len(failed_paths)} failed file(s) kept in queue")
+            self.btn_convert.configure(text=f"Retry Failed ({len(failed_paths)})")
+        else:
+            self.lbl_count.configure(text="0 files selected")
+            self.selected_files = []
+            self.btn_convert.configure(text="Start Conversion")
         self.clear_previews()
+        self.load_previews()
         self.update_preview_header()
 
         summary = (f"{batch.converted} converted, {batch.copied} copied, "

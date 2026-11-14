@@ -4,15 +4,19 @@ A lightweight Windows desktop application for batch image conversion. It provide
 
 ## Features
 
-- Batch-select PNG, JPG, JPEG, WebP, and BMP images.
-- Preview selected images before processing.
+- Batch-select PNG, JPG, JPEG, WebP, and BMP images, or drag-and-drop files and folders from Explorer.
+- Preview selected images before processing (thumbnails load in the background).
 - Remove individual files from the queue.
-- Convert images to WebP, PNG, or JPG.
+- Convert images to WebP, PNG, or JPG in parallel across a thread pool.
+- Conversion options: quality slider, lossless WebP, max-dimension resize, EXIF metadata preservation, and an overwrite policy.
+- Existing outputs are never overwritten unless you enable **Overwrite existing files**; colliding outputs get `-1`, `-2`, ... suffixes.
 - Preserve files that already use the selected target extension by copying them with `shutil.copy2`.
 - Skip a file when its source and destination paths are identical.
-- Show progress while the batch is processed.
-- Keep the interface responsive by running conversion in a background thread.
-- Report conversion, copy, skipped, and failed-file counts when processing finishes.
+- Show progress while the batch is processed, with a Stop button to cancel at any time (or press Escape).
+- Failed files stay in the queue after a run for one-click retry; the full error report is written to `%TEMP%\universal_image_converter_errors.txt`.
+- Settings and recent output folders persist between sessions in `%APPDATA%\UniversalImageConverter\settings.json`.
+- Keyboard shortcuts: Enter starts the conversion, Ctrl+O opens the file picker, Escape stops a running conversion.
+- Report conversion, copy, skipped, cancelled, and failed-file counts when processing finishes.
 - Display readable error details and suggestions for common file and permission failures.
 
 ## Supported Formats
@@ -26,15 +30,15 @@ The file picker lists:
 - WebP
 - BMP
 
-Pillow performs the actual image decoding, so a file must be a valid image that the installed Pillow version can recognize.
+Pillow performs the actual image decoding, so a file must be a valid image that the installed Pillow version can recognize. Drag-and-drop uses `tkinterdnd2`; if that package is missing, the app still runs and the file picker remains fully functional.
 
 ### Output
 
-- WebP, saved at quality 90
+- WebP, saved at the quality slider's value (default 90, or lossless)
 - PNG
-- JPG, saved at quality 90
+- JPG, saved at the quality slider's value (default 90)
 
-For JPG output, RGBA and palette images are converted to RGB. Palette images are converted to RGBA for WebP and PNG output when needed. JPG output uses the `.jpg` extension for both `.jpg` and `.jpeg` source files.
+For JPG output, RGBA, palette, and grayscale+alpha images are converted to RGB. CMYK images are converted to RGB for PNG and WebP output. Palette PNGs keep their palette. EXIF orientation is applied automatically, so rotated phone photos come out upright; tick **Keep EXIF metadata** to preserve the remaining EXIF data. JPG output uses the `.jpg` extension for both `.jpg` and `.jpeg` source files.
 
 ## Requirements
 
@@ -72,13 +76,21 @@ The application requires an output folder to be selected before **Start Conversi
 
 ## Use the Application
 
-1. Select one or more images.
+1. Drop images onto the window or select them with the file picker.
 2. Review the image previews and remove any unwanted files.
-3. Choose an output folder.
-4. Select WebP, PNG, or JPG.
-5. Click **Start Conversion**.
+3. Choose an output folder (recent folders are remembered).
+4. Select WebP, PNG, or JPG and adjust the options (quality, resize, metadata, overwrite).
+5. Click **Start Conversion** (or press Enter). Use **Stop** (or Escape) to cancel.
 
-Output files keep the original base name and receive the selected target extension. If an output file with the same name already exists, the new file is saved as `name-1.ext`, `name-2.ext`, and so on — existing files are never overwritten.
+## Use the Application
+
+1. Drop images onto the window or select them with the file picker.
+2. Review the image previews and remove any unwanted files.
+3. Choose an output folder (recent folders are remembered).
+4. Select WebP, PNG, or JPG and adjust the options (quality, resize, metadata, overwrite).
+5. Click **Start Conversion** (or press Enter). Use **Stop** (or Escape) to cancel.
+
+Output files keep the original base name and receive the selected target extension. If an output file with the same name already exists, the new file is saved as `name-1.ext`, `name-2.ext`, and so on — existing files are never overwritten unless **Overwrite existing files** is enabled.
 
 ## Build a Windows Executable
 

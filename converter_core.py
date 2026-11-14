@@ -82,6 +82,16 @@ class ConversionResult:
     output_path: Path | None
 
 
+@dataclass(frozen=True)
+class ConvertOptions:
+    """User-selectable conversion settings (audit Step 4 features)."""
+    quality: int = 90
+    lossless_webp: bool = False
+    max_dimension: int | None = None   # downscale so neither side exceeds this
+    keep_metadata: bool = False        # preserve EXIF (orientation stays fixed)
+    overwrite: bool = False            # replace existing outputs instead of suffixing
+
+
 def _same_file(a: Path, b: Path) -> bool:
     try:
         return a.exists() and a.resolve() == b.resolve()
@@ -90,12 +100,14 @@ def _same_file(a: Path, b: Path) -> bool:
 
 
 def convert_file(source_path: str | Path, output_dir: str | Path,
-                 target_ext: str) -> ConversionResult:
+                 target_ext: str, options: ConvertOptions | None = None) -> ConversionResult:
     """Convert one image file, or copy it when the extension already matches.
 
-    Never overwrites an existing output file (collision suffixes are added
-    by resolve_output_path). Raises on failure so the caller can log it.
+    With default options, existing outputs are never overwritten (collision
+    suffixes are added by resolve_output_path). Raises on failure so the
+    caller can log it.
     """
+    opts = options or ConvertOptions()
     src = Path(source_path)
     out_dir = Path(output_dir)
     ext = normalize_target_ext(target_ext)
@@ -110,7 +122,10 @@ def convert_file(source_path: str | Path, output_dir: str | Path,
     if _same_file(default_output, src):
         return ConversionResult("skipped", None)
 
-    output_path = resolve_output_path(src, out_dir, ext)
+    if opts.overwrite:
+        output_path = out_dir / f"{src.stem}.{ext}"
+    else:
+        output_path = resolve_output_path(src, out_dir, ext)
 
     source_ext = src.suffix.lower().lstrip(".")
     same_as_target = source_ext == ext or (ext == "jpg" and source_ext == "jpeg")
@@ -121,10 +136,18 @@ def convert_file(source_path: str | Path, output_dir: str | Path,
 
     with Image.open(src) as img:
         prepared = prepare_image_for_save(img, ext)
+        if opts.max_dimension is not None and max(prepared.size) > opts.max_dimension:
+            prepared.thumbnail((opts.max_dimension, opts.max_dimension))
         save_format = "JPEG" if ext == "jpg" else ext.upper()
         save_kwargs: dict = {}
         if ext in {"jpg", "webp"}:
-            save_kwargs["quality"] = 90
+            save_kwargs["quality"] = opts.quality
+        if ext == "webp" and opts.lossless_webp:
+            save_kwargs["lossless"] = True
+        if opts.keep_metadata:
+            exif_bytes = prepared.info.get("exif")
+            if exif_bytes:
+                save_kwargs["exif"] = exif_bytes
         prepared.save(output_path, format=save_format, **save_kwargs)
     return ConversionResult("converted", output_path)
 
@@ -143,7 +166,8 @@ class BatchResult:
 def convert_files(files: list[str | Path], output_dir: str | Path,
                   target_ext: str, *, max_workers: int = 4,
                   cancel_event: threading.Event | None = None,
-                  progress_callback=None) -> BatchResult:
+                  progress_callback=None,
+                  options: ConvertOptions | None = None) -> BatchResult:
     """Convert many files across a thread pool (Pillow releases the GIL).
 
     ``progress_callback(done, total)`` fires once per finished file from
@@ -166,7 +190,7 @@ def convert_files(files: list[str | Path], output_dir: str | Path,
         # queued, so a pre-submit check alone would still convert everything.
         if cancel_event is not None and cancel_event.is_set():
             raise _Cancelled()
-        return convert_file(path, output_dir, target_ext)
+        return convert_file(path, output_dir, target_ext, options)
 
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
         futures = {pool.submit(run_one, path): Path(path) for path in files}
