@@ -1,13 +1,14 @@
 import os
-import shutil
 import threading
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
+
+from converter_core import convert_file, describe_error
 
 # Set modern dark theme
-ctk.set_appearance_mode("dark")  
-ctk.set_default_color_theme("blue")  
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 class ImageConverterApp(ctk.CTk):
     def __init__(self):
@@ -22,6 +23,8 @@ class ImageConverterApp(ctk.CTk):
         self.selected_files = []
         self.output_directory = ""
         self.preview_empty_state_frame = None
+        self.is_converting = False
+        self.remove_buttons = []
         
         self.create_layout()
 
@@ -193,53 +196,22 @@ class ImageConverterApp(ctk.CTk):
             return "JPG"
         return target_ext.upper()
 
-    def get_error_reason(self, exc, source_path, output_path):
-        if isinstance(exc, FileNotFoundError):
-            return "The source file or destination folder could not be found."
-        if isinstance(exc, PermissionError):
-            return "Windows blocked access to the file or the destination folder."
-        if isinstance(exc, UnidentifiedImageError):
-            return "Pillow could not recognize this file as a supported image."
-        if isinstance(exc, shutil.SameFileError):
-            return "The app tried to copy the file onto itself in the same location."
-        if isinstance(exc, IsADirectoryError):
-            return "The selected path points to a folder instead of an image file."
-        if isinstance(exc, OSError):
-            return "The image may be damaged, locked by another app, or not supported by this format."
-        return "An unexpected error occurred while processing the file."
-
-    def get_error_suggestion(self, exc):
-        if isinstance(exc, FileNotFoundError):
-            return "Re-select the image or choose a destination folder that still exists."
-        if isinstance(exc, PermissionError):
-            return "Close the image in other apps or pick a folder where you have write access."
-        if isinstance(exc, UnidentifiedImageError):
-            return "Check that the file is a valid image and try again with another source file."
-        if isinstance(exc, shutil.SameFileError):
-            return "Use a different output folder or a different filename to avoid copying onto the same file."
-        if isinstance(exc, IsADirectoryError):
-            return "Make sure the selected item is an image file, not a folder."
-        if isinstance(exc, OSError):
-            return "Try another image file or another target format, and make sure the file is not locked."
-        return "Try the file again or choose a different source image."
-
-    def build_error_log(self, file_path, stage, exc, output_path=None):
-        parts = [
+    def build_error_log(self, file_path, exc):
+        reason, suggestion = describe_error(exc)
+        return "\n".join([
             f"File: {os.path.basename(file_path)}",
-            f"Stage: {stage}",
             f"Error: {exc.__class__.__name__}: {exc}",
-            f"Reason: {self.get_error_reason(exc, file_path, output_path)}",
-            f"Suggestion: {self.get_error_suggestion(exc)}",
-        ]
-        if output_path:
-            parts.insert(2, f"Destination: {output_path}")
-        return "\n".join(parts)
+            f"Reason: {reason}",
+            f"Suggestion: {suggestion}",
+        ])
 
     def on_target_format_change(self, *_):
         if self.selected_files:
             self.load_previews()
 
     def remove_selected_file(self, file_path):
+        if self.is_converting:
+            return
         self.selected_files = [path for path in self.selected_files if path != file_path]
 
         if self.selected_files:
@@ -279,12 +251,13 @@ class ImageConverterApp(ctk.CTk):
             self.update_preview_header()
             return
         
+        self.remove_buttons = []
         for path in self.selected_files:
             try:
                 img = Image.open(path)
                 img.thumbnail((120, 120))
                 ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
-                
+
                 item_frame = ctk.CTkFrame(
                     self.scrollable_frame,
                     fg_color="#262626",
@@ -294,14 +267,15 @@ class ImageConverterApp(ctk.CTk):
                 )
                 item_frame.pack(side="top", fill="x", pady=(0, 12), padx=4)
                 item_frame.grid_columnconfigure(1, weight=1)
-                
+
                 preview_wrap = ctk.CTkFrame(item_frame, fg_color="#1f1f1f", corner_radius=12, width=132, height=132)
                 preview_wrap.grid(row=0, column=0, rowspan=2, sticky="w", padx=12, pady=12)
                 preview_wrap.grid_propagate(False)
 
                 img_label = ctk.CTkLabel(preview_wrap, image=ctk_img, text="")
+                img_label.image_ref = ctk_img  # prevent garbage collection of the image
                 img_label.place(relx=0.5, rely=0.5, anchor="center")
-                
+
                 name_label = ctk.CTkLabel(
                     item_frame,
                     text=os.path.basename(path),
@@ -333,13 +307,65 @@ class ImageConverterApp(ctk.CTk):
                     command=lambda file_path=path: self.remove_selected_file(file_path)
                 )
                 remove_button.grid(row=0, column=2, rowspan=2, sticky="e", padx=12, pady=12)
-                
+                self.remove_buttons.append(remove_button)
+
             except Exception as e:
-                # Basic error handling for preview rendering
-                print(f"Preview error for {path}: {e}")
+                # H4: a file Pillow cannot preview must stay visible in the
+                # queue instead of vanishing (it will still be converted).
+                self._build_preview_error_card(path, e)
+
+        if self.is_converting:
+            for button in self.remove_buttons:
+                button.configure(state="disabled")
 
         self.update_preview_scroll_state()
         self.update_preview_header()
+
+    def _build_preview_error_card(self, path, exc):
+        reason, _ = describe_error(exc)
+        item_frame = ctk.CTkFrame(
+            self.scrollable_frame,
+            fg_color="#2b2320",
+            corner_radius=16,
+            border_width=1,
+            border_color="#8a5a2a"
+        )
+        item_frame.pack(side="top", fill="x", pady=(0, 12), padx=4)
+        item_frame.grid_columnconfigure(1, weight=1)
+
+        name_label = ctk.CTkLabel(
+            item_frame,
+            text=f"{os.path.basename(path)} (preview unavailable)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=300
+        )
+        name_label.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 2))
+
+        reason_label = ctk.CTkLabel(
+            item_frame,
+            text=f"{reason} The file stays in the queue and will still be converted.",
+            text_color="#c9a227",
+            font=ctk.CTkFont(size=11),
+            anchor="w",
+            justify="left",
+            wraplength=420
+        )
+        reason_label.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 14))
+
+        remove_button = ctk.CTkButton(
+            item_frame,
+            text="Remove",
+            width=94,
+            height=34,
+            corner_radius=10,
+            fg_color="#B93838",
+            hover_color="#9B2C2C",
+            command=lambda file_path=path: self.remove_selected_file(file_path)
+        )
+        remove_button.grid(row=0, column=1, rowspan=2, sticky="e", padx=12, pady=12)
+        self.remove_buttons.append(remove_button)
 
     def update_preview_scroll_state(self):
         visible_children = [widget for widget in self.scrollable_frame.winfo_children() if widget is not self.preview_empty_state_frame]
@@ -369,13 +395,31 @@ class ImageConverterApp(ctk.CTk):
                 "Please choose an output folder before starting the conversion."
             )
             return
+        if self.is_converting or not self.selected_files:
+            return
 
+        # H2: snapshot everything the worker needs on the main thread --
+        # reading tkinter variables from the worker thread is unsafe.
+        files = list(self.selected_files)
+        target_ext = self.get_target_extension()
+        output_dir = self.output_directory
+
+        self.is_converting = True
         self.btn_convert.configure(state="disabled")
         self.btn_select.configure(state="disabled")
+        self.btn_out_dir.configure(state="disabled")
+        for radio in (self.radio_webp, self.radio_png, self.radio_jpg):
+            radio.configure(state="disabled")
+        for button in self.remove_buttons:
+            button.configure(state="disabled")
         self.progress_bar.set(0)
         self.lbl_status.configure(text="Converting...")
-        
-        thread = threading.Thread(target=self.process_images)
+
+        thread = threading.Thread(
+            target=self.process_images,
+            args=(files, target_ext, output_dir),
+            daemon=True,
+        )
         thread.start()
 
     # NEW HELPER: Safely updates the UI from the background thread
@@ -383,68 +427,40 @@ class ImageConverterApp(ctk.CTk):
         self.progress_bar.set(progress_val)
         self.lbl_status.configure(text=status_text)
 
-    def process_images(self):
-        target_ext = self.get_target_extension()
-        target_display = self.get_target_display_name()
-        save_format = "JPEG" if target_ext == "jpg" else target_display
-        total_files = len(self.selected_files)
+    def process_images(self, files, target_ext, output_dir):
+        total_files = len(files)
         converted_count = 0
         copied_count = 0
         skipped_count = 0
-        error_logs = []  # NEW: Array to collect errors
-        
-        for index, file_path in enumerate(self.selected_files):
-            output_path = None
+        error_logs = []
+
+        for index, file_path in enumerate(files):
             try:
-                if not os.path.isfile(file_path):
-                    raise FileNotFoundError("The source image no longer exists.")
-
-                if not self.output_directory or not os.path.isdir(self.output_directory):
-                    raise FileNotFoundError("The selected output folder is missing or invalid.")
-
-                base_name, source_ext = os.path.splitext(os.path.basename(file_path))
-                source_ext = source_ext.lower().lstrip(".")
-                output_name = f"{base_name}.{target_ext}"
-                output_path = os.path.join(self.output_directory, output_name)
-
-                source_same_as_target = source_ext == target_ext or (target_ext == "jpg" and source_ext == "jpeg")
-
-                if os.path.abspath(file_path).lower() == os.path.abspath(output_path).lower():
-                    skipped_count += 1
-                    continue
-
-                if source_same_as_target:
-                    shutil.copy2(file_path, output_path)
+                result = convert_file(file_path, output_dir, target_ext)
+                if result.status == "converted":
+                    converted_count += 1
+                elif result.status == "copied":
                     copied_count += 1
                 else:
-                    with Image.open(file_path) as img:
-                        if target_ext == 'jpg' and img.mode in ['RGBA', 'P']:
-                            img = img.convert('RGB')
-                        elif target_ext == 'webp' and img.mode == 'P':
-                            img = img.convert('RGBA')
-                        elif target_ext == 'png' and img.mode in ['CMYK', 'P']:
-                            img = img.convert('RGBA')
-
-                        save_kwargs = {}
-                        if target_ext in {'jpg', 'webp'}:
-                            save_kwargs['quality'] = 90
-
-                        img.save(output_path, format=save_format, **save_kwargs)
-                        converted_count += 1
-
+                    skipped_count += 1
             except Exception as e:
-                error_logs.append(self.build_error_log(file_path, "convert/copy", e, output_path))
-                
-            # Safely pass positional arguments to the helper method
+                error_logs.append(self.build_error_log(file_path, e))
+
             progress_value = (index + 1) / total_files
             status_text = f"Processing: {index + 1}/{total_files}"
             self.after(0, self.sync_ui_progress, progress_value, status_text)
-            
-        # Re-enable UI when finished and pass error logs
-        self.after(0, self.finish_conversion, converted_count, copied_count, skipped_count, total_files, error_logs)
+
+        self.after(0, self.finish_conversion, converted_count, copied_count,
+                   skipped_count, total_files, error_logs)
 
     def finish_conversion(self, converted_count, copied_count, skipped_count, total_files, error_logs):
+        self.is_converting = False
         self.btn_select.configure(state="normal")
+        self.btn_out_dir.configure(state="normal")
+        for radio in (self.radio_webp, self.radio_png, self.radio_jpg):
+            radio.configure(state="normal")
+        for button in self.remove_buttons:
+            button.configure(state="normal")
         self.refresh_convert_button_state()
         self.lbl_count.configure(text="0 files selected")
         self.selected_files = []
