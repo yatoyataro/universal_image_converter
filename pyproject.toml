@@ -1,0 +1,8 @@
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+# BLE001 (blind except) and S110 (except-pass) are deliberate in the GUI:
+# stale UI callbacks and corrupted settings must never crash the app.
+ignore = ["BLE001", "S110"]

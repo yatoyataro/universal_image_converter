@@ -23,7 +23,7 @@ def test_exif_orientation_applied_and_tag_cleared(tmp_path):
     src = _exif_image_with_orientation(tmp_path)
     result = prepare_image_for_save(src, "webp")
     assert result.size == (2, 4)  # sides swapped by the rotation
-    assert not result.getexif().get(0x0112, 1) != 1  # orientation tag neutralized
+    assert result.getexif().get(274, 1) == 1  # orientation tag neutralized
 
 
 def test_image_without_exif_unchanged(tmp_path):

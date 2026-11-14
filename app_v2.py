@@ -3,8 +3,9 @@ import os
 import queue
 import tempfile
 import threading
-import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
 from PIL import Image
 
 from converter_core import ConvertOptions, convert_files, describe_error
