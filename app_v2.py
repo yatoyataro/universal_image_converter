@@ -3,6 +3,7 @@ import os
 import queue
 import tempfile
 import threading
+import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -18,6 +19,8 @@ except ImportError:  # drag-and-drop stays optional
     _DND_AVAILABLE = False
 
 SUPPORTED_INPUT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+APP_VERSION = "1.1.0"
+ERROR_REPORT_PATH = os.path.join(tempfile.gettempdir(), "universal_image_converter_errors.txt")
 
 # Default appearance; _load_settings() overrides this from the saved
 # preference. All widget colors are (light, dark) tuples from ui_palette.
@@ -67,12 +70,37 @@ class ImageConverterApp(
         self._load_settings()
 
     def create_layout(self):
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=0, minsize=330)
         self.grid_columnconfigure(1, weight=1)
 
+        # --- Top bar: app name + Settings / Help buttons ---
+        self.top_bar = ctk.CTkFrame(self, fg_color="transparent")
+        self.top_bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 4))
+        self.top_bar.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            self.top_bar,
+            text="Universal Image Converter",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=ui_palette.TEXT_MUTED,
+        ).grid(row=0, column=0, sticky="w")
+
+        menu_btn = {
+            "height": 28, "width": 92, "corner_radius": 8, "fg_color": "transparent",
+            "border_width": 1, "border_color": ui_palette.BORDER_INPUT,
+            "font": ctk.CTkFont(size=12),
+        }
+        self.btn_settings = ctk.CTkButton(self.top_bar, text="Settings", command=self._open_settings_menu, **menu_btn)
+        self.btn_settings.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        self.btn_help = ctk.CTkButton(self.top_bar, text="Help", command=self._open_help_menu, **menu_btn)
+        self.btn_help.grid(row=0, column=2, sticky="e")
+
+        self._setup_menus()
+
         self.workspace = ctk.CTkFrame(self, fg_color="transparent")
-        self.workspace.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=18, pady=18)
+        self.workspace.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=18, pady=(4, 18))
         self.workspace.grid_rowconfigure(0, weight=1)
         self.workspace.grid_columnconfigure(0, weight=0, minsize=330)
         self.workspace.grid_columnconfigure(1, weight=1)
@@ -251,6 +279,116 @@ class ImageConverterApp(
         self.scrollable_frame = ctk.CTkScrollableFrame(self.preview_shell, fg_color=ui_palette.BG_CARD, corner_radius=0)
         self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
         self.update_preview_scroll_state()
+
+    # --- Top-bar menus (Settings / Help) ---
+
+    def _setup_menus(self):
+        self._appearance_var = tk.StringVar(
+            value="Dark" if ctk.get_appearance_mode().lower() == "dark" else "Light")
+
+        self._settings_menu = tk.Menu(self, tearoff=0)
+        appearance_menu = tk.Menu(self._settings_menu, tearoff=0)
+        appearance_menu.add_radiobutton(
+            label="Dark", variable=self._appearance_var,
+            command=lambda: self._set_appearance("dark"))
+        appearance_menu.add_radiobutton(
+            label="Light", variable=self._appearance_var,
+            command=lambda: self._set_appearance("light"))
+        self._settings_menu.add_cascade(label="Appearance", menu=appearance_menu)
+
+        self._help_menu = tk.Menu(self, tearoff=0)
+        self._help_menu.add_command(label="Report issue...", command=self._show_report_issue_dialog)
+        self._help_menu.add_command(label="About", command=self._show_about_dialog)
+
+    def _open_settings_menu(self):
+        self._popup_menu(self._settings_menu, self.btn_settings)
+
+    def _open_help_menu(self):
+        self._popup_menu(self._help_menu, self.btn_help)
+
+    def _popup_menu(self, menu, button):
+        try:
+            menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+        finally:
+            menu.grab_release()
+
+    def _set_appearance(self, mode):
+        ctk.set_appearance_mode(mode)
+        self._appearance_var.set("Dark" if mode == "dark" else "Light")
+        self._save_settings()
+
+    @staticmethod
+    def _make_dialog(parent, title, width, height):
+        dlg = ctk.CTkToplevel(parent)
+        dlg.title(title)
+        dlg.geometry(f"{width}x{height}")
+        dlg.resizable(False, False)
+        dlg.transient(parent)
+        dlg.bind("<Escape>", lambda _event: dlg.destroy())
+        # grab_set fails if the window is not yet viewable; retry shortly.
+        dlg.after(150, lambda: dlg.grab_set() if dlg.winfo_exists() else None)
+        return dlg
+
+    def _show_report_issue_dialog(self):
+        dlg = self._make_dialog(self, "Report an issue", 480, 300)
+        dlg.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(dlg, text="Report an issue", font=ctk.CTkFont(size=18, weight="bold")).grid(
+            row=0, column=0, sticky="w", padx=24, pady=(24, 6))
+        ctk.CTkLabel(
+            dlg,
+            text=("Conversion failures are collected in an error report you can "
+                  "export after a failed run. If the app misbehaves, include that "
+                  "report file when you tell the developer."),
+            wraplength=420, justify="left", text_color=ui_palette.TEXT_MUTED,
+            font=ctk.CTkFont(size=12),
+        ).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 10))
+        ctk.CTkLabel(
+            dlg, text=f"Report location:\n{ERROR_REPORT_PATH}",
+            wraplength=420, justify="left", font=ctk.CTkFont(size=11),
+            text_color=ui_palette.TEXT_FAINT,
+        ).grid(row=2, column=0, sticky="w", padx=24, pady=(0, 16))
+
+        buttons = ctk.CTkFrame(dlg, fg_color="transparent")
+        buttons.grid(row=3, column=0, sticky="ew", padx=24, pady=(0, 24))
+        buttons.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(
+            buttons, text="Open error report file",
+            command=self._open_error_report, height=36,
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            buttons, text="Close", width=90, height=36, fg_color="transparent",
+            border_width=1, border_color=ui_palette.BORDER_INPUT,
+            command=dlg.destroy,
+        ).grid(row=0, column=1, sticky="e")
+
+    def _open_error_report(self):
+        if os.path.isfile(ERROR_REPORT_PATH):
+            try:
+                os.startfile(ERROR_REPORT_PATH)
+            except OSError as exc:
+                messagebox.showerror("Could not open report", str(exc))
+        else:
+            messagebox.showinfo(
+                "No report yet",
+                "No error report exists. Run a conversion with failures and "
+                "click 'Export Error Report', then try again.")
+
+    def _show_about_dialog(self):
+        dlg = self._make_dialog(self, "About", 380, 240)
+        dlg.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(dlg, text="Universal Image Converter", font=ctk.CTkFont(size=18, weight="bold")).grid(
+            row=0, column=0, pady=(32, 2))
+        ctk.CTkLabel(dlg, text=f"Version {APP_VERSION}", text_color=ui_palette.TEXT_MUTED).grid(
+            row=1, column=0, pady=(0, 12))
+        ctk.CTkLabel(
+            dlg,
+            text="Batch-convert images between PNG, JPG, WebP and BMP.\n"
+                 "Built with Python, CustomTkinter and Pillow.",
+            justify="center", text_color=ui_palette.TEXT_MUTED, font=ctk.CTkFont(size=12),
+        ).grid(row=2, column=0, pady=(0, 20), padx=24)
+        ctk.CTkButton(dlg, text="Close", width=90, command=dlg.destroy).grid(
+            row=3, column=0, pady=(0, 24))
 
     def select_files(self):
         filetypes = (
@@ -784,7 +922,7 @@ class ImageConverterApp(
         if error_logs:
             self.lbl_status.configure(text="Completed with errors.", text_color="red")
             # L12: write the full report to disk; the dialog shows only a preview.
-            report_path = os.path.join(tempfile.gettempdir(), "universal_image_converter_errors.txt")
+            report_path = ERROR_REPORT_PATH
             try:
                 with open(report_path, "w", encoding="utf-8") as f:
                     f.write("\n\n".join(error_logs))
