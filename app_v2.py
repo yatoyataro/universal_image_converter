@@ -1,10 +1,11 @@
 import os
+import queue
 import threading
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from PIL import Image
 
-from converter_core import convert_file, describe_error
+from converter_core import convert_files, describe_error
 
 # Set modern dark theme
 ctk.set_appearance_mode("dark")
@@ -25,6 +26,14 @@ class ImageConverterApp(ctk.CTk):
         self.preview_empty_state_frame = None
         self.is_converting = False
         self.remove_buttons = []
+        self.cancel_event = threading.Event()
+        self._preview_generation = 0
+        # Thread-safe bridge: workers put (callable, args) here and the
+        # main-thread poller executes them. Calling tkinter from worker
+        # threads directly is unsafe (RuntimeError: main thread is not in
+        # main loop) -- this replaces all cross-thread after() calls.
+        self._ui_queue: queue.Queue = queue.Queue()
+        self.after(50, self._drain_ui_queue)
         
         self.create_layout()
 
@@ -103,6 +112,18 @@ class ImageConverterApp(ctk.CTk):
         
         self.btn_convert = ctk.CTkButton(self.controls_inner, text="Start Conversion", command=self.start_conversion_thread, state="disabled", height=44, font=ctk.CTkFont(weight="bold"))
         self.btn_convert.grid(row=10, column=0, pady=(8, 0), sticky="ew")
+
+        self.btn_cancel = ctk.CTkButton(
+            self.controls_inner,
+            text="Stop",
+            command=self.cancel_conversion,
+            height=36,
+            fg_color="#B93838",
+            hover_color="#9B2C2C",
+        )
+        # Hidden until a conversion is running (M10).
+        self.btn_cancel.grid(row=11, column=0, pady=(8, 0), sticky="ew")
+        self.btn_cancel.grid_remove()
 
         # --- Right Panel: Image Preview ---
         self.right_frame = ctk.CTkFrame(self.workspace, fg_color="#151515", corner_radius=24, border_width=1, border_color="#2d2d2d")
@@ -228,7 +249,10 @@ class ImageConverterApp(ctk.CTk):
         self.refresh_convert_button_state()
 
     def load_previews(self):
+        self._preview_generation += 1
+        generation = self._preview_generation
         self.clear_previews()
+        self._preview_cards = {}
 
         if not self.selected_files:
             self.preview_empty_state_frame = ctk.CTkFrame(self.scrollable_frame, fg_color="#252525", corner_radius=16, border_width=1, border_color="#333333")
@@ -250,143 +274,163 @@ class ImageConverterApp(ctk.CTk):
             self.update_preview_scroll_state()
             self.update_preview_header()
             return
-        
+
+        # M6: cards render instantly; thumbnails decode off the main thread.
         self.remove_buttons = []
         for path in self.selected_files:
-            try:
-                img = Image.open(path)
-                img.thumbnail((120, 120))
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            item_frame = ctk.CTkFrame(
+                self.scrollable_frame,
+                fg_color="#262626",
+                corner_radius=16,
+                border_width=1,
+                border_color="#343434"
+            )
+            item_frame.pack(side="top", fill="x", pady=(0, 12), padx=4)
+            item_frame.grid_columnconfigure(1, weight=1)
 
-                item_frame = ctk.CTkFrame(
-                    self.scrollable_frame,
-                    fg_color="#262626",
-                    corner_radius=16,
-                    border_width=1,
-                    border_color="#343434"
-                )
-                item_frame.pack(side="top", fill="x", pady=(0, 12), padx=4)
-                item_frame.grid_columnconfigure(1, weight=1)
+            preview_wrap = ctk.CTkFrame(item_frame, fg_color="#1f1f1f", corner_radius=12, width=132, height=132)
+            preview_wrap.grid(row=0, column=0, rowspan=2, sticky="w", padx=12, pady=12)
+            preview_wrap.grid_propagate(False)
 
-                preview_wrap = ctk.CTkFrame(item_frame, fg_color="#1f1f1f", corner_radius=12, width=132, height=132)
-                preview_wrap.grid(row=0, column=0, rowspan=2, sticky="w", padx=12, pady=12)
-                preview_wrap.grid_propagate(False)
+            img_label = ctk.CTkLabel(preview_wrap, text="", font=ctk.CTkFont(size=10))
+            img_label.configure(text_color="#7a7a7a")
+            img_label.place(relx=0.5, rely=0.5, anchor="center")
 
-                img_label = ctk.CTkLabel(preview_wrap, image=ctk_img, text="")
-                img_label.image_ref = ctk_img  # prevent garbage collection of the image
-                img_label.place(relx=0.5, rely=0.5, anchor="center")
+            name_label = ctk.CTkLabel(
+                item_frame,
+                text=os.path.basename(path),
+                font=ctk.CTkFont(size=13, weight="bold"),
+                anchor="w",
+                justify="left",
+                wraplength=300
+            )
+            name_label.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(18, 2))
 
-                name_label = ctk.CTkLabel(
-                    item_frame,
-                    text=os.path.basename(path),
-                    font=ctk.CTkFont(size=13, weight="bold"),
-                    anchor="w",
-                    justify="left",
-                    wraplength=300
-                )
-                name_label.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(18, 2))
+            details_label = ctk.CTkLabel(
+                item_frame,
+                text="Loading preview..." if self.is_converting is False else f"Ready for {self.get_target_display_name()} conversion",
+                text_color="#9a9a9a",
+                font=ctk.CTkFont(size=11),
+                anchor="w",
+                justify="left"
+            )
+            details_label.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 18))
 
-                details_label = ctk.CTkLabel(
-                    item_frame,
-                    text=f"Ready for {self.get_target_display_name()} conversion",
-                    text_color="#9a9a9a",
-                    font=ctk.CTkFont(size=11),
-                    anchor="w",
-                    justify="left"
-                )
-                details_label.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 18))
+            remove_button = ctk.CTkButton(
+                item_frame,
+                text="Remove",
+                width=94,
+                height=34,
+                corner_radius=10,
+                fg_color="#B93838",
+                hover_color="#9B2C2C",
+                command=lambda file_path=path: self.remove_selected_file(file_path)
+            )
+            remove_button.grid(row=0, column=2, rowspan=2, sticky="e", padx=12, pady=12)
+            self.remove_buttons.append(remove_button)
 
-                remove_button = ctk.CTkButton(
-                    item_frame,
-                    text="Remove",
-                    width=94,
-                    height=34,
-                    corner_radius=10,
-                    fg_color="#B93838",
-                    hover_color="#9B2C2C",
-                    command=lambda file_path=path: self.remove_selected_file(file_path)
-                )
-                remove_button.grid(row=0, column=2, rowspan=2, sticky="e", padx=12, pady=12)
-                self.remove_buttons.append(remove_button)
-
-            except Exception as e:
-                # H4: a file Pillow cannot preview must stay visible in the
-                # queue instead of vanishing (it will still be converted).
-                self._build_preview_error_card(path, e)
+            self._preview_cards[path] = {
+                "frame": item_frame,
+                "wrap": preview_wrap,
+                "img_label": img_label,
+                "details": details_label,
+            }
 
         if self.is_converting:
             for button in self.remove_buttons:
                 button.configure(state="disabled")
 
+        threading.Thread(
+            target=self._generate_thumbnails,
+            args=(list(self.selected_files), generation),
+            daemon=True,
+        ).start()
+
         self.update_preview_scroll_state()
         self.update_preview_header()
 
-    def _build_preview_error_card(self, path, exc):
-        reason, _ = describe_error(exc)
-        item_frame = ctk.CTkFrame(
-            self.scrollable_frame,
-            fg_color="#2b2320",
-            corner_radius=16,
-            border_width=1,
-            border_color="#8a5a2a"
-        )
-        item_frame.pack(side="top", fill="x", pady=(0, 12), padx=4)
-        item_frame.grid_columnconfigure(1, weight=1)
+    def _post_to_ui(self, func, *args):
+        self._ui_queue.put((func, args))
 
-        name_label = ctk.CTkLabel(
-            item_frame,
-            text=f"{os.path.basename(path)} (preview unavailable)",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            anchor="w",
-            justify="left",
-            wraplength=300
-        )
-        name_label.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 2))
+    def _drain_ui_queue(self):
+        try:
+            while True:
+                func, args = self._ui_queue.get_nowait()
+                try:
+                    func(*args)
+                except Exception:
+                    pass  # one stale callback must not kill the poller
+        except queue.Empty:
+            pass
+        self.after(50, self._drain_ui_queue)
 
-        reason_label = ctk.CTkLabel(
-            item_frame,
-            text=f"{reason} The file stays in the queue and will still be converted.",
-            text_color="#c9a227",
-            font=ctk.CTkFont(size=11),
-            anchor="w",
-            justify="left",
-            wraplength=420
-        )
-        reason_label.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 14))
+    def _generate_thumbnails(self, paths, generation):
+        """Worker: decode thumbnails one by one and post them to the UI."""
+        for path in paths:
+            if generation != self._preview_generation:
+                return  # queue changed; stale work is discarded
+            try:
+                # M7: context manager guarantees the file handle closes.
+                with Image.open(path) as img:
+                    img.thumbnail((120, 120))
+                    thumb = img.copy()
+                self._post_to_ui(self._apply_thumbnail, path, thumb, generation)
+            except Exception as e:
+                self._post_to_ui(self._mark_preview_failed, path, e, generation)
 
-        remove_button = ctk.CTkButton(
-            item_frame,
-            text="Remove",
-            width=94,
-            height=34,
-            corner_radius=10,
-            fg_color="#B93838",
-            hover_color="#9B2C2C",
-            command=lambda file_path=path: self.remove_selected_file(file_path)
-        )
-        remove_button.grid(row=0, column=1, rowspan=2, sticky="e", padx=12, pady=12)
-        self.remove_buttons.append(remove_button)
+    def _apply_thumbnail(self, path, thumb, generation):
+        if generation != self._preview_generation:
+            return
+        card = self._preview_cards.get(path)
+        if card is None:
+            return
+        try:
+            ctk_img = ctk.CTkImage(light_image=thumb, dark_image=thumb, size=thumb.size)
+            card["img_label"].configure(image=ctk_img, text="")
+            card["img_label"].image_ref = ctk_img  # prevent garbage collection
+            card["details"].configure(text=f"Ready for {self.get_target_display_name()} conversion")
+        except Exception:
+            pass
+
+    def _mark_preview_failed(self, path, exc, generation):
+        """H4: preview failure must stay visible; the file is still converted."""
+        if generation != self._preview_generation:
+            return
+        card = self._preview_cards.get(path)
+        if card is None:
+            return
+        try:
+            reason, _ = describe_error(exc)
+            card["frame"].configure(fg_color="#2b2320", border_color="#8a5a2a")
+            card["img_label"].configure(text="!", text_color="#c9a227")
+            card["details"].configure(
+                text=f"{reason} The file stays in the queue and will still be converted.",
+                text_color="#c9a227",
+                wraplength=420,
+            )
+        except Exception:
+            pass
+
+        self.update_preview_scroll_state()
+        self.update_preview_header()
 
     def update_preview_scroll_state(self):
         visible_children = [widget for widget in self.scrollable_frame.winfo_children() if widget is not self.preview_empty_state_frame]
         has_previews = len(visible_children) > 0
 
-        if has_previews:
-            self.scrollable_frame.unbind_all("<MouseWheel>")
-            self.scrollable_frame.unbind_all("<Button-4>")
-            self.scrollable_frame.unbind_all("<Button-5>")
-            self.scrollable_frame.bind_all("<MouseWheel>", self.scrollable_frame._mouse_wheel_all, add=True)
-            self.scrollable_frame.bind_all("<Button-4>", self.scrollable_frame._mouse_wheel_all, add=True)
-            self.scrollable_frame.bind_all("<Button-5>", self.scrollable_frame._mouse_wheel_all, add=True)
-            self.scrollable_frame._scrollbar.grid()
-            self.scrollable_frame._parent_canvas.configure(scrollregion=self.scrollable_frame._parent_canvas.bbox("all"))
-        else:
-            self.scrollable_frame.unbind_all("<MouseWheel>")
-            self.scrollable_frame.unbind_all("<Button-4>")
-            self.scrollable_frame.unbind_all("<Button-5>")
-            self.scrollable_frame._scrollbar.grid_remove()
-            self.scrollable_frame._parent_canvas.yview_moveto(0)
-            self.scrollable_frame._parent_canvas.configure(scrollregion=(0, 0, 0, 0))
+        # M9: CustomTkinter exposes no public API for this; tolerate internal
+        # layout changes instead of crashing on a library upgrade.
+        try:
+            if has_previews:
+                self.scrollable_frame._scrollbar.grid()
+                self.scrollable_frame._parent_canvas.configure(
+                    scrollregion=self.scrollable_frame._parent_canvas.bbox("all"))
+            else:
+                self.scrollable_frame._scrollbar.grid_remove()
+                self.scrollable_frame._parent_canvas.yview_moveto(0)
+                self.scrollable_frame._parent_canvas.configure(scrollregion=(0, 0, 0, 0))
+        except AttributeError:
+            pass
 
     def start_conversion_thread(self):
         if not self.output_directory:
@@ -405,6 +449,7 @@ class ImageConverterApp(ctk.CTk):
         output_dir = self.output_directory
 
         self.is_converting = True
+        self.cancel_event.clear()
         self.btn_convert.configure(state="disabled")
         self.btn_select.configure(state="disabled")
         self.btn_out_dir.configure(state="disabled")
@@ -412,6 +457,7 @@ class ImageConverterApp(ctk.CTk):
             radio.configure(state="disabled")
         for button in self.remove_buttons:
             button.configure(state="disabled")
+        self.btn_cancel.grid()
         self.progress_bar.set(0)
         self.lbl_status.configure(text="Converting...")
 
@@ -422,6 +468,12 @@ class ImageConverterApp(ctk.CTk):
         )
         thread.start()
 
+    def cancel_conversion(self):
+        """M10: ask the worker to stop before starting the next file."""
+        self.cancel_event.set()
+        self.btn_cancel.configure(state="disabled")
+        self.lbl_status.configure(text="Stopping...")
+
     # NEW HELPER: Safely updates the UI from the background thread
     def sync_ui_progress(self, progress_val, status_text):
         self.progress_bar.set(progress_val)
@@ -429,32 +481,24 @@ class ImageConverterApp(ctk.CTk):
 
     def process_images(self, files, target_ext, output_dir):
         total_files = len(files)
-        converted_count = 0
-        copied_count = 0
-        skipped_count = 0
-        error_logs = []
+        max_workers = min(4, os.cpu_count() or 1)
 
-        for index, file_path in enumerate(files):
-            try:
-                result = convert_file(file_path, output_dir, target_ext)
-                if result.status == "converted":
-                    converted_count += 1
-                elif result.status == "copied":
-                    copied_count += 1
-                else:
-                    skipped_count += 1
-            except Exception as e:
-                error_logs.append(self.build_error_log(file_path, e))
+        batch = convert_files(
+            files,
+            output_dir,
+            target_ext,
+            max_workers=max_workers,
+            cancel_event=self.cancel_event,
+            progress_callback=lambda done, total: self._post_to_ui(
+                self.sync_ui_progress, done / total, f"Processing: {done}/{total}"),
+        )
+        error_logs = [self.build_error_log(path, exc) for path, exc in batch.errors]
+        self._post_to_ui(self.finish_conversion, batch, total_files, error_logs)
 
-            progress_value = (index + 1) / total_files
-            status_text = f"Processing: {index + 1}/{total_files}"
-            self.after(0, self.sync_ui_progress, progress_value, status_text)
-
-        self.after(0, self.finish_conversion, converted_count, copied_count,
-                   skipped_count, total_files, error_logs)
-
-    def finish_conversion(self, converted_count, copied_count, skipped_count, total_files, error_logs):
+    def finish_conversion(self, batch, total_files, error_logs):
         self.is_converting = False
+        self.btn_cancel.grid_remove()
+        self.btn_cancel.configure(state="normal")
         self.btn_select.configure(state="normal")
         self.btn_out_dir.configure(state="normal")
         for radio in (self.radio_webp, self.radio_png, self.radio_jpg):
@@ -466,26 +510,28 @@ class ImageConverterApp(ctk.CTk):
         self.selected_files = []
         self.clear_previews()
         self.update_preview_header()
-        
-        # NEW: Handle user notifications based on success/failure
+
+        summary = (f"{batch.converted} converted, {batch.copied} copied, "
+                   f"{batch.skipped} already-in-place, {batch.failed} failed, "
+                   f"{batch.cancelled} cancelled (of {total_files})")
+
+        if batch.cancelled and not error_logs:
+            self.lbl_status.configure(text="Cancelled.", text_color="gray")
+            messagebox.showinfo("Conversion Cancelled", f"Stopped early. {summary}.")
+            return
+
         if error_logs:
             self.lbl_status.configure(text="Completed with errors.", text_color="red")
-            
-            # Create a readable error string (limit to first 8 errors so it fits on screen)
             error_details = "\n\n".join(error_logs[:8])
             if len(error_logs) > 8:
                 error_details += f"\n\n...and {len(error_logs) - 8} more errors."
-                
             messagebox.showwarning(
-                "Conversion Issues", 
-                f"Processed {converted_count} converted, {copied_count} copied, and {skipped_count} already-in-place file(s) out of {total_files}.\n\nThe following errors occurred:\n\n{error_details}"
+                "Conversion Issues",
+                f"Finished with {summary}.\n\nThe following errors occurred:\n\n{error_details}"
             )
         else:
             self.lbl_status.configure(text="Complete!", text_color="gray")
-            messagebox.showinfo(
-                "Conversion Complete", 
-                f"Successfully processed {converted_count} converted, {copied_count} copied, and {skipped_count} already-in-place file(s)!"
-            )
+            messagebox.showinfo("Conversion Complete", f"Successfully processed: {summary}.")
 
 if __name__ == "__main__":
     app = ImageConverterApp()

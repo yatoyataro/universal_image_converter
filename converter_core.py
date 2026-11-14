@@ -5,7 +5,9 @@ This module contains no GUI code so it can be tested headlessly.
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -125,6 +127,70 @@ def convert_file(source_path: str | Path, output_dir: str | Path,
             save_kwargs["quality"] = 90
         prepared.save(output_path, format=save_format, **save_kwargs)
     return ConversionResult("converted", output_path)
+
+
+@dataclass
+class BatchResult:
+    """Aggregate outcome of a batch conversion run (mutated as it runs)."""
+    converted: int = 0
+    copied: int = 0
+    skipped: int = 0
+    cancelled: int = 0
+    failed: int = 0
+    errors: list[tuple[Path, BaseException]] = field(default_factory=list)
+
+
+def convert_files(files: list[str | Path], output_dir: str | Path,
+                  target_ext: str, *, max_workers: int = 4,
+                  cancel_event: threading.Event | None = None,
+                  progress_callback=None) -> BatchResult:
+    """Convert many files across a thread pool (Pillow releases the GIL).
+
+    ``progress_callback(done, total)`` fires once per finished file from
+    worker threads. If ``cancel_event`` is set, unstarted files are counted
+    as cancelled instead of being processed.
+    """
+    result = BatchResult()
+    total = len(files)
+    if total == 0:
+        return result
+
+    done = 0
+    done_lock = threading.Lock()
+
+    class _Cancelled(Exception):
+        pass
+
+    def run_one(path):
+        # Check inside the task: by the time futures run, they are already
+        # queued, so a pre-submit check alone would still convert everything.
+        if cancel_event is not None and cancel_event.is_set():
+            raise _Cancelled()
+        return convert_file(path, output_dir, target_ext)
+
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        futures = {pool.submit(run_one, path): Path(path) for path in files}
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                outcome = future.result()
+            except _Cancelled:
+                result.cancelled += 1
+            except Exception as exc:
+                result.failed += 1
+                result.errors.append((path, exc))
+            else:
+                if outcome.status == "converted":
+                    result.converted += 1
+                elif outcome.status == "copied":
+                    result.copied += 1
+                else:
+                    result.skipped += 1
+            with done_lock:
+                done += 1
+                if progress_callback is not None:
+                    progress_callback(done, total)
+    return result
 
 
 def describe_error(exc: BaseException) -> tuple[str, str]:
